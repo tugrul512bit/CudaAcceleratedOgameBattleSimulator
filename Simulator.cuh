@@ -28,7 +28,7 @@ struct GpuBuffer {
     char* ptr_h;
     uint64_t numBytes;
     std::shared_ptr<GpuStream> gpuStream;
-    GpuBuffer(uint64_t numBytesPrm = 0, std::shared_ptr<GpuStream> streamPrm = nullptr) {
+    GpuBuffer(uint64_t numBytesPrm = 0, std::shared_ptr<GpuStream> streamPrm = nullptr, bool isScalar = false) {
         gpuStream = streamPrm;
         numBytes = numBytesPrm;
         if (numBytes > 0 && streamPrm != nullptr) {
@@ -39,11 +39,11 @@ struct GpuBuffer {
         }
     }
     template<typename TYPE>
-    TYPE get(uint64_t index) {
+    TYPE get(uint32_t index) {
         return reinterpret_cast<TYPE*>(ptr_h)[index];
     }
     template<typename TYPE>
-    void set(uint64_t index, TYPE value) {
+    void set(uint32_t index, TYPE value) {
         reinterpret_cast<TYPE*>(ptr_h)[index] = value;
     }
     void updateDevice() {
@@ -82,10 +82,6 @@ struct GpuKernel {
         cudaSetDevice(gpuStream->deviceIndex);
         cudaLaunchKernel(ptr, dim3(numBlocks, 1, 1), dim3(numThreads, 1, 1), args.data(), 0, gpuStream->stream);
     }
-    void wait() {
-        cudaSetDevice(gpuStream->deviceIndex);
-        cudaStreamSynchronize(gpuStream->stream);
-    }
 };
 
 struct Gpu {
@@ -113,12 +109,14 @@ struct Gpu {
         uint32_t numBlocks = (numTotalThreads + numThreadsPerBlock - 1) / numThreadsPerBlock;
         gpuKernel[name]->run(numBlocks, numThreadsPerBlock);
     }
-    void waitKernel(std::string name) {
-        gpuKernel[name]->wait();
+    void wait() {
+        cudaSetDevice(gpuStream->deviceIndex);
+        cudaStreamSynchronize(gpuStream->stream);
     }
+
 };
 
-
+// This is only a wrapper for multiple gpus to compute same thing as a simulation-level-parallelism.
 struct GpuSystem {
     int count;
     std::vector<std::shared_ptr<Gpu>> gpus;
@@ -135,7 +133,7 @@ struct GpuSystem {
     }
 
     template<typename TYPE>
-    void addBuffer(std::string name, int numElements) {
+    void addBuffer(std::string name, uint32_t numElements) {
         for (auto& gpu : gpus) {
             gpu->addBuffer(name, numElements * sizeof(TYPE));
         }
@@ -172,9 +170,9 @@ struct GpuSystem {
             gpu->runKernel(name, numTotalThreads);
         }
     }
-    void waitKernel(std::string name) {
+    void wait() {
         for (auto& gpu : gpus) {
-            gpu->waitKernel(name);
+            gpu->wait();
         }
     }
 
@@ -182,18 +180,25 @@ struct GpuSystem {
 
 struct Simulator {
     std::shared_ptr<GpuSystem> system;
+    std::vector<uint32_t> shipTypeIndex;
+    uint32_t numShips;
     Simulator(bool debug = false) {
         system = std::make_shared<GpuSystem>(debug);
         if (debug) {
             std::cout << "num gpus = " << system->count << std::endl;
         }
-        int numShips = 1000;
         system->addBuffer<uint32_t>("number of ships", 1);
+        numShips = 0;
         system->writeToBuffer("number of ships", 0, numShips);
-        system->updateDeviceBuffer("number of ships");
-        system->addBuffer<uint32_t>("ship index", 1000);
-        system->addKernel("initialize ship index", (void*)&Kernels::k_initializeShipIndex, { "number of ships", "ship index" });
-        system->runKernel("initialize ship index", 1000);
-        system->waitKernel("initialize ship index");
+    }
+    void addShips(uint32_t numberOfNewShips, uint32_t typeIndexOfNewShips) {
+        shipTypeIndex.resize(shipTypeIndex.size() + numberOfNewShips);
+        for (int i = 0; i < numberOfNewShips; i++) {
+            shipTypeIndex[i + numShips] = typeIndexOfNewShips;
+        }
+        numShips += numberOfNewShips;
+        system->addBuffer<uint32_t>("ship type index", numShips);
+        system->writeToBuffer("number of ships", 0, numShips);
+        system->wait();
     }
 };
