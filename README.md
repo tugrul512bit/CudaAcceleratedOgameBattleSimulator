@@ -7,4 +7,6 @@ Dependencies:
 
 - CUDA runtime
 - curand
+- (probably thrust or cuda-unbounded too)
+- At least 1 Nvidia GPU
 
