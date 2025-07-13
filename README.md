@@ -3,3 +3,8 @@ To do: thousands of simulations per second for billions of spaceships on multipl
 
 In development.
 
+Dependencies:
+
+- CUDA runtime
+- curand
+
