@@ -88,9 +88,14 @@ struct Gpu {
     std::shared_ptr<GpuStream> gpuStream;
     std::map<std::string, std::shared_ptr<GpuBuffer>> gpuBuffer;
     std::map<std::string, std::shared_ptr<GpuKernel>> gpuKernel;
+    uint32_t maxBlocks;
     Gpu(int gpuIndex = -1) {
         if (gpuIndex >= 0) {
             gpuStream = std::make_shared<GpuStream>(gpuIndex);
+            cudaDeviceProp deviceProperties;
+            cudaSetDevice(gpuStream->deviceIndex);
+            cudaGetDeviceProperties(&deviceProperties, gpuStream->deviceIndex);
+            maxBlocks = deviceProperties.maxBlocksPerMultiProcessor * deviceProperties.multiProcessorCount;
         }
     }
     void addBuffer(std::string name, uint64_t numBytes) {
@@ -106,8 +111,9 @@ struct Gpu {
     }
     void runKernel(std::string name, uint32_t numTotalThreads) {
         uint32_t numThreadsPerBlock = 512;
-        uint32_t numBlocks = (numTotalThreads + numThreadsPerBlock - 1) / numThreadsPerBlock;
-        gpuKernel[name]->run(numBlocks, numThreadsPerBlock);
+        uint32_t required = (numTotalThreads + numThreadsPerBlock - 1) / numThreadsPerBlock;
+        uint32_t utilized = maxBlocks < required ? maxBlocks : required;
+        gpuKernel[name]->run(utilized, numThreadsPerBlock);
     }
     void wait() {
         cudaSetDevice(gpuStream->deviceIndex);
@@ -182,14 +188,18 @@ struct Simulator {
     std::shared_ptr<GpuSystem> system;
     std::vector<uint32_t> shipTypeIndex;
     uint32_t numShips;
-    Simulator(bool debug = false) {
+    uint64_t globalBaseRandomSeed;
+    Simulator(bool debug = false, int randomSeed = 0) {
         system = std::make_shared<GpuSystem>(debug);
         if (debug) {
             std::cout << "num gpus = " << system->count << std::endl;
         }
         system->addBuffer<uint32_t>("number of ships", 1);
+        system->addBuffer<uint64_t>("global base random seed", 1);
         numShips = 0;
+        globalBaseRandomSeed = randomSeed;
         system->writeToBuffer("number of ships", 0, numShips);
+        system->writeToBuffer("global base random seed", 0, globalBaseRandomSeed);
     }
     void addShips(uint32_t numberOfNewShips, uint32_t typeIndexOfNewShips) {
         shipTypeIndex.resize(shipTypeIndex.size() + numberOfNewShips);
@@ -197,8 +207,15 @@ struct Simulator {
             shipTypeIndex[i + numShips] = typeIndexOfNewShips;
         }
         numShips += numberOfNewShips;
+        // Allocating ship type index and random seed arrays.
         system->addBuffer<uint32_t>("ship type index", numShips);
+        system->addBuffer<curandState>("random seed", numShips);
+        // Updating new number of ships on device.
         system->writeToBuffer("number of ships", 0, numShips);
+        system->updateDeviceBuffer("number of ships");
+        // Initializing random seeds of each ship.
+        system->addKernel("init random seed", (void*)Kernels::k_initializeRandomSeeds, { "random seed", "number of ships", "global base random seed" });
+        system->runKernel("init random seed", numShips);
         system->wait();
     }
 };
