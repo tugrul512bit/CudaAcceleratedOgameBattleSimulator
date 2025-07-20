@@ -19,7 +19,7 @@ Development:
 - initialization of ship types: to do
 - copying ship data to simulation ship data (that will be updated many times): to do
 - randomly picking a target per simulation ship: to do
-- sorting simulation ships on their targets: to do (this can be done with thrust or cub)
+- sorting simulation ships on their target index: to do (this can be done with thrust or cub)
 - reduction of total damage from source simulation ships for target simulation ships and calculating remaining hull: to do (maybe with cub's segmented functions or a custom kernel)
 - stream-compaction of simulation ships with (hull > 0) condition: to do (thrust's copy_if)
 - updating new number of simulation ships on both teams: to do
