@@ -186,36 +186,105 @@ struct GpuSystem {
 
 struct Simulator {
     std::shared_ptr<GpuSystem> system;
-    std::vector<uint32_t> shipTypeIndex;
-    uint32_t numShips;
-    uint64_t globalBaseRandomSeed;
-    Simulator(bool debug = false, int randomSeed = 0) {
+    uint32_t numShips[2];
+    uint64_t globalBaseRandomSeed[2];
+    int numShipTypes;
+    Simulator(bool debug = false, int randomSeedTeam1 = 0, int randomSeedTeam2 = 100) {
         system = std::make_shared<GpuSystem>(debug);
         if (debug) {
             std::cout << "num gpus = " << system->count << std::endl;
         }
-        system->addBuffer<uint32_t>("number of ships", 1);
-        system->addBuffer<uint64_t>("global base random seed", 1);
-        numShips = 0;
-        globalBaseRandomSeed = randomSeed;
-        system->writeToBuffer("number of ships", 0, numShips);
-        system->writeToBuffer("global base random seed", 0, globalBaseRandomSeed);
-    }
-    void addShips(uint32_t numberOfNewShips, uint32_t typeIndexOfNewShips) {
-        shipTypeIndex.resize(shipTypeIndex.size() + numberOfNewShips);
-        for (int i = 0; i < numberOfNewShips; i++) {
-            shipTypeIndex[i + numShips] = typeIndexOfNewShips;
+        system->addBuffer<uint32_t>("team 1 number of ships", 1);
+        system->addBuffer<uint32_t>("team 2 number of ships", 1);
+        system->addBuffer<uint64_t>("team 1 global base random seed", 1);
+        system->addBuffer<uint64_t>("team 2 global base random seed", 1);
+        numShips[0] = 0;
+        numShips[1] = 0;
+        globalBaseRandomSeed[0] = randomSeedTeam1;
+        globalBaseRandomSeed[1] = randomSeedTeam2;
+        system->writeToBuffer("team 1 number of ships", 0, numShips[0]);
+        system->writeToBuffer("team 2 number of ships", 0, numShips[1]);
+        system->writeToBuffer("team 1 global base random seed", 0, globalBaseRandomSeed[0]);
+        system->writeToBuffer("team 2 global base random seed", 0, globalBaseRandomSeed[1]);
+
+        // Adding ship specs.
+        std::vector<uint32_t> shipTypeIndex;
+        std::vector<uint32_t> shipOffense;
+        std::vector<uint32_t> shipShield;
+        std::vector<uint32_t> shipHull;
+        numShipTypes = 0;
+        // Light fighter.
+        {
+            shipTypeIndex.push_back(numShipTypes);
+            shipOffense.push_back(50);
+            shipShield.push_back(10);
+            shipHull.push_back(400);
+            numShipTypes++;
         }
-        numShips += numberOfNewShips;
-        // Allocating ship type index and random seed arrays.
-        system->addBuffer<uint32_t>("ship type index", numShips);
-        system->addBuffer<curandState>("random seed", numShips);
+        // Heavy fighter.
+        {
+            shipTypeIndex.push_back(numShipTypes);
+            shipOffense.push_back(150);
+            shipShield.push_back(25);
+            shipHull.push_back(1000);
+            numShipTypes++;
+        }
+        system->addBuffer<uint32_t>("default ship type index", numShipTypes);
+        system->addBuffer<uint32_t>("default ship offense", numShipTypes);
+        system->addBuffer<uint32_t>("default ship shield", numShipTypes);
+        system->addBuffer<uint32_t>("default ship hull", numShipTypes);
+        system->addBuffer<uint32_t>("number of ship types", 1);
+        system->writeToBuffer<uint32_t>("number of ship types", 0, numShipTypes);
+        system->updateDeviceBuffer("number of ship types");
+        for (int i = 0; i < numShipTypes; i++) {
+            system->writeToBuffer<uint32_t>("default ship type index", i, shipTypeIndex[i]);
+            system->writeToBuffer<uint32_t>("default ship offense", i, shipOffense[i]);
+            system->writeToBuffer<uint32_t>("default ship shield", i, shipShield[i]);
+            system->writeToBuffer<uint32_t>("default ship hull", i, shipHull[i]);
+        }
+        system->updateDeviceBuffer("default ship type index");
+        system->updateDeviceBuffer("default ship offense");
+        system->updateDeviceBuffer("default ship shield");
+        system->updateDeviceBuffer("default ship hull");
+
+        //system->addBuffer
+    }
+    // team: 1 or 2
+    void addShips(uint32_t totalNumberOfShips, int team) {
+        numShips[team - 1] = totalNumberOfShips;
+        std::string teamString = std::string("team ")+std::to_string(team)+std::string(" ");
+        // Init random seed.
+        system->addBuffer<curandState>(teamString + std::string("random seed"), numShips[team - 1]);
         // Updating new number of ships on device.
-        system->writeToBuffer("number of ships", 0, numShips);
-        system->updateDeviceBuffer("number of ships");
+        system->writeToBuffer(teamString+std::string("number of ships"), 0, numShips[team - 1]);
+        system->updateDeviceBuffer(teamString + std::string("number of ships"));
         // Initializing random seeds of each ship.
-        system->addKernel("init random seed", (void*)Kernels::k_initializeRandomSeeds, { "random seed", "number of ships", "global base random seed" });
-        system->runKernel("init random seed", numShips);
+        system->addKernel(teamString + std::string("init random seed"), (void*)Kernels::k_initializeRandomSeeds, { teamString + std::string("random seed"), teamString + "number of ships", teamString + "global base random seed" });
+        system->runKernel(teamString + std::string("init random seed"), numShips[team - 1]);
+
+        system->addBuffer<SpaceShip>(teamString + std::string("ships"), numShips[team - 1]);
         system->wait();
+    }
+    void initShips() {
+        system->addKernel(std::string("init space ships"), (void*)Kernels::k_initializeShipHulls, {
+            std::string("team 1 number of ships"),
+            std::string("team 2 number of ships"),
+            std::string("team 1 ships"),
+            std::string("team 2 ships"),
+            std::string("default ship hull"),
+            std::string("number of ship types"),
+        });
+        uint32_t n = (numShips[0] < numShips[1]) ? numShips[1] : numShips[0];
+        system->runKernel(std::string("init space ships"), n);
+        system->wait();
+    }
+
+    void demo() {
+        // Adding 1000 ships of type 0.
+        int team1 = 1;
+        int team2 = 2;
+        addShips(1000, team1);
+        addShips(1000, team2);
+        initShips();
     }
 };
