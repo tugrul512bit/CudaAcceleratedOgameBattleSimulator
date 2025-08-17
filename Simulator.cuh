@@ -155,10 +155,8 @@ struct GpuSystem {
         }
     }
     template<typename TYPE>
-    void readFromBuffer(std::string name, uint32_t index) {
-        for (auto& gpu : gpus) {
-            gpu->gpuBuffer[name]->get<TYPE>(index);
-        }
+    TYPE readFromBuffer(int gpu, std::string name, uint32_t index) {
+        return gpus[gpu]->gpuBuffer[name]->get<TYPE>(index);
     }
     void updateDeviceBuffer(std::string name) {
         for (auto& gpu : gpus) {
@@ -304,6 +302,24 @@ struct Simulator {
         system->runKernel(std::string("init space ships"), n);
         system->wait();
     }
+    void pickTargetsKernelInit() {
+        system->addKernel(std::string("pick targets"), (void*)Kernels::k_pickTarget, { 
+            std::string("team 1 random seed"),  
+            std::string("team 2 random seed"),
+            std::string("team 1 ships"),
+            std::string("team 2 ships"),
+            std::string("team 1 number of ships"),
+            std::string("team 2 number of ships"),
+        });
+    }
+    void pickTargets() {
+        int firstGpu = 0;
+        numShips[0] = system->readFromBuffer<uint32_t>(firstGpu, std::string("team 1 number of ships backup"), 0);
+        numShips[1] = system->readFromBuffer<uint32_t>(firstGpu, std::string("team 1 number of ships backup"), 1);
+        uint32_t n = (numShips[0] < numShips[1]) ? numShips[1] : numShips[0];
+        system->runKernel(std::string("pick targets"), n);
+        system->wait();
+    }
 
     void demo() {
         // Adding 900 light fighters, 100 heavy fighters
@@ -314,5 +330,7 @@ struct Simulator {
         addShips(team1, { { lightFighter, 900 }, { heavyFighter, 100 } });
         addShips(team2, { { lightFighter, 900 }, { heavyFighter, 100 } });
         initShips();
+        pickTargetsKernelInit();
+        pickTargets();
     }
 };
