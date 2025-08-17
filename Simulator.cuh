@@ -46,6 +46,10 @@ struct GpuBuffer {
     void set(uint32_t index, TYPE value) {
         reinterpret_cast<TYPE*>(ptr_h)[index] = value;
     }
+    void copyTo(GpuBuffer* destination, size_t numBytes) {
+        cudaSetDevice(gpuStream->deviceIndex);
+        cudaMemcpyAsync(destination->ptr_d, ptr_d, numBytes, cudaMemcpyDeviceToDevice, gpuStream->stream);
+    }
     void updateDevice() {
         cudaSetDevice(gpuStream->deviceIndex);
         cudaMemcpyAsync(ptr_d, ptr_h, numBytes, cudaMemcpyHostToDevice, gpuStream->stream);
@@ -168,6 +172,22 @@ struct GpuSystem {
             gpu->gpuBuffer[name]->updateHost();
         }
     }
+    void copyBuffer(std::string sourceName, std::string destinationName) {
+        for (auto& gpu : gpus) {
+            // gpu->gpuBuffer[name]->ptr_d + gpu->gpuBuffer[name]->numBytes
+            gpu->gpuBuffer[sourceName]->copyTo(gpu->gpuBuffer[destinationName].get(), gpu->gpuBuffer[sourceName]->numBytes);
+        }
+    }
+    void sortBuffer(std::string name) {
+        for (auto& gpu : gpus) {
+            cudaSetDevice(gpu->gpuStream->deviceIndex);
+            thrust::device_ptr<SpaceShip> begin_d((SpaceShip*)(gpu->gpuBuffer[name]->ptr_d)); 
+            thrust::device_ptr<SpaceShip> end_d((SpaceShip*)(gpu->gpuBuffer[name]->ptr_d + gpu->gpuBuffer[name]->numBytes));
+            thrust::sort(thrust::cuda::par.on(gpu->gpuStream->stream), begin_d, end_d);
+            // debug:
+            gpu->gpuBuffer[name]->updateHost();
+        }
+    }
     void addKernel(std::string kernelName, void* kernelPtr, std::vector<std::string> parameterNames) {
         for (auto& gpu : gpus) {
             gpu->addKernel(kernelName, kernelPtr, parameterNames);
@@ -270,6 +290,7 @@ struct Simulator {
         system->addKernel(teamString + std::string("init random seed"), (void*)Kernels::k_initializeRandomSeeds, { teamString + std::string("random seed"), teamString + "number of ships", teamString + "global base random seed" });
         system->runKernel(teamString + std::string("init random seed"), numShips[team - 1]);
         system->addBuffer<SpaceShip>(teamString + std::string("ships"), numShips[team - 1]);
+        system->addBuffer<SpaceShip>(teamString + std::string("ships sorted"), numShips[team - 1]);
         system->addBuffer<SpaceShip>(teamString + std::string("ships backup"), numShips[team - 1]);
         system->writeToBuffer(teamString + std::string("number of ships backup"), 0, numShips[team - 1]);
         system->updateDeviceBuffer(teamString + std::string("number of ships backup"));
@@ -320,7 +341,13 @@ struct Simulator {
         system->runKernel(std::string("pick targets"), n);
         system->wait();
     }
-
+    void sortShipsOnTargets() {
+       system->copyBuffer("team 1 ships", "team 1 ships sorted");
+       system->copyBuffer("team 2 ships", "team 2 ships sorted");
+       system->sortBuffer("team 1 ships sorted");
+       system->sortBuffer("team 2 ships sorted");
+       system->wait();
+    }
     void demo() {
         // Adding 900 light fighters, 100 heavy fighters
         int team1 = 1;
@@ -332,5 +359,6 @@ struct Simulator {
         initShips();
         pickTargetsKernelInit();
         pickTargets();
+        sortShipsOnTargets();
     }
 };
