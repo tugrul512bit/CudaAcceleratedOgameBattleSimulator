@@ -4,8 +4,14 @@
 #include <device_launch_parameters.h>
 #include <curand_kernel.h>
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
+#include <thrust/reduce.h>
+#include <thrust/functional.h>
+#include <thrust/iterator/transform_iterator.h>
+#include <thrust/iterator/counting_iterator.h>
+
 struct SpaceShip {
 	uint32_t typeIndex;
 	uint32_t remainingHull;
@@ -18,6 +24,14 @@ struct SpaceShip {
 struct SpecShipBlockDescriptor {
 	uint32_t typeIndex;
 	uint32_t count;
+};
+// Returns damage dealt per ship, based on type index with a lookup.
+struct LutHelper {
+	uint32_t* offensePtr;
+	__host__ __device__
+		uint32_t operator()(const SpaceShip& ship) const {
+		return offensePtr[ship.typeIndex];
+	}
 };
 namespace Kernels {
 	__global__ void k_initializeRandomSeeds(curandState* seeds, uint32_t* numShips, uint64_t* baseSeed);
