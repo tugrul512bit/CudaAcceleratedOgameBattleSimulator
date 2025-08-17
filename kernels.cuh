@@ -3,10 +3,17 @@
 #include <cuda_runtime_api.h>
 #include <device_launch_parameters.h>
 #include <curand_kernel.h>
+#include <thrust/device_vector.h>
+#include <thrust/sort.h>
+#include <thrust/execution_policy.h>
 struct SpaceShip {
 	uint32_t typeIndex;
 	uint32_t remainingHull;
 	uint32_t targetIndex;
+	__host__ __device__
+		bool operator<(const SpaceShip& ship) const {
+		return targetIndex < ship.targetIndex;
+	}
 };
 struct SpecShipBlockDescriptor {
 	uint32_t typeIndex;
