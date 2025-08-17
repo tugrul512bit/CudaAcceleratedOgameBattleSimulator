@@ -2,6 +2,7 @@
 
 int main() {
     bool debug = true;
+    std::srand(static_cast<unsigned int>(std::time(nullptr)));
     int randomSeed = rand();
     int randomSeed2 = rand();
     int lightFighter = 0;
@@ -9,10 +10,10 @@ int main() {
     std::vector<SpecShipBlockDescriptor> fleet1;
     std::vector<SpecShipBlockDescriptor> fleet2;
     SpecShipBlockDescriptor lFighter;
-    lFighter.count = 900000;
+    lFighter.count = 9;
     lFighter.typeIndex = lightFighter;
     SpecShipBlockDescriptor hFighter;
-    hFighter.count = 100000;
+    hFighter.count = 1;
     hFighter.typeIndex = heavyFighter;
     fleet1.push_back(lFighter);
     fleet1.push_back(hFighter);
