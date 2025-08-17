@@ -97,6 +97,10 @@ struct Gpu {
             cudaGetDeviceProperties(&deviceProperties, gpuStream->deviceIndex);
             maxBlocks = deviceProperties.maxBlocksPerMultiProcessor * deviceProperties.multiProcessorCount;
         }
+        else {
+            gpuStream = nullptr;
+            maxBlocks = 0;
+        }
     }
     void addBuffer(std::string name, uint64_t numBytes) {
         gpuBuffer[name] = std::make_shared<GpuBuffer>(numBytes, gpuStream);
@@ -196,6 +200,8 @@ struct Simulator {
         }
         system->addBuffer<uint32_t>("team 1 number of ships", 1);
         system->addBuffer<uint32_t>("team 2 number of ships", 1);
+        system->addBuffer<uint32_t>("team 1 number of ships backup", 1);
+        system->addBuffer<uint32_t>("team 2 number of ships backup", 1);
         system->addBuffer<uint64_t>("team 1 global base random seed", 1);
         system->addBuffer<uint64_t>("team 2 global base random seed", 1);
         numShips[0] = 0;
@@ -250,19 +256,33 @@ struct Simulator {
         //system->addBuffer
     }
     // team: 1 or 2
-    void addShips(uint32_t totalNumberOfShips, int team) {
+    void addShips(int team, std::vector<SpecShipBlockDescriptor> ships) {
+        uint32_t totalNumberOfShips = 0;
+        for (auto& c : ships) {
+            totalNumberOfShips += c.count;
+        }
         numShips[team - 1] = totalNumberOfShips;
-        std::string teamString = std::string("team ")+std::to_string(team)+std::string(" ");
+        std::string teamString = std::string("team ") + std::to_string(team) + std::string(" ");
         // Init random seed.
         system->addBuffer<curandState>(teamString + std::string("random seed"), numShips[team - 1]);
         // Updating new number of ships on device.
-        system->writeToBuffer(teamString+std::string("number of ships"), 0, numShips[team - 1]);
+        system->writeToBuffer(teamString + std::string("number of ships"), 0, numShips[team - 1]);
         system->updateDeviceBuffer(teamString + std::string("number of ships"));
         // Initializing random seeds of each ship.
         system->addKernel(teamString + std::string("init random seed"), (void*)Kernels::k_initializeRandomSeeds, { teamString + std::string("random seed"), teamString + "number of ships", teamString + "global base random seed" });
         system->runKernel(teamString + std::string("init random seed"), numShips[team - 1]);
-
         system->addBuffer<SpaceShip>(teamString + std::string("ships"), numShips[team - 1]);
+        system->addBuffer<SpaceShip>(teamString + std::string("ships backup"), numShips[team - 1]);
+        system->writeToBuffer(teamString + std::string("number of ships backup"), 0, numShips[team - 1]);
+        system->updateDeviceBuffer(teamString + std::string("number of ships backup"));
+        system->addBuffer<uint32_t>(teamString + std::string("number of descriptors"), 1);
+        system->writeToBuffer(teamString + std::string("number of descriptors"), 0, ships.size());
+        system->addBuffer<SpecShipBlockDescriptor>(teamString + std::string("ship type descriptors"), ships.size());
+        for (int i = 0; i < ships.size(); i++) {
+            system->writeToBuffer(teamString + std::string("ship type descriptors"), i, ships[i]);
+        }
+        system->updateDeviceBuffer(teamString + std::string("number of descriptors"));
+        system->updateDeviceBuffer(teamString + std::string("ship type descriptors"));
         system->wait();
     }
     void initShips() {
@@ -271,20 +291,28 @@ struct Simulator {
             std::string("team 2 number of ships"),
             std::string("team 1 ships"),
             std::string("team 2 ships"),
+            std::string("team 1 ships backup"),
+            std::string("team 2 ships backup"),
+            std::string("team 1 ship type descriptors"),
+            std::string("team 2 ship type descriptors"),
+            std::string("team 1 number of descriptors"),
+            std::string("team 2 number of descriptors"),
             std::string("default ship hull"),
-            std::string("number of ship types"),
-        });
+            std::string("number of ship types")
+            });
         uint32_t n = (numShips[0] < numShips[1]) ? numShips[1] : numShips[0];
         system->runKernel(std::string("init space ships"), n);
         system->wait();
     }
 
     void demo() {
-        // Adding 1000 ships of type 0.
+        // Adding 900 light fighters, 100 heavy fighters
         int team1 = 1;
         int team2 = 2;
-        addShips(1000, team1);
-        addShips(1000, team2);
+        uint32_t lightFighter = 0;
+        uint32_t heavyFighter = 1;
+        addShips(team1, { { lightFighter, 900 }, { heavyFighter, 100 } });
+        addShips(team2, { { lightFighter, 900 }, { heavyFighter, 100 } });
         initShips();
     }
 };
