@@ -24,3 +24,4 @@ Development:
 - stream-compaction of simulation ships with (hull > 0) condition: to do (thrust's copy_if)
 - updating new number of simulation ships on both teams: to do
 - repeat if each side has at least 1 ship: to do
+- add simulation queue (1 gpu per consumer) with n number of consumers: to do
