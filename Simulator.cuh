@@ -162,7 +162,10 @@ struct Simulator {
         gpu->gpuBuffer["team 2 number of ships"]->set<uint32_t>(0, numShips[1]);
         gpu->gpuBuffer["team 1 global base random seed"]->set<uint64_t>(0, globalBaseRandomSeed[0]);
         gpu->gpuBuffer["team 2 global base random seed"]->set<uint64_t>(0, globalBaseRandomSeed[1]);
-
+        gpu->gpuBuffer["team 1 number of ships"]->updateDevice();
+        gpu->gpuBuffer["team 2 number of ships"]->updateDevice();
+        gpu->gpuBuffer["team 1 global base random seed"]->updateDevice();
+        gpu->gpuBuffer["team 2 global base random seed"]->updateDevice();
         // Adding ship specs.
         std::vector<uint32_t> shipTypeIndex;
         std::vector<uint32_t> shipOffense;
@@ -279,6 +282,36 @@ struct Simulator {
        gpu->gpuBuffer["team 2 ships sorted"]->sort<SpaceShip>();
        gpu->wait();
     }
+    void reduceSegmentDamageByTargetIndex(int team) {
+        printf("\n --------- %i ---------- \n", numShips[team - 1]);
+        std::string teamString = std::string("team ") + std::to_string(team) + " ";
+        auto keysBegin = thrust::make_transform_iterator((SpaceShip*)gpu->gpuBuffer[teamString + "ships sorted"]->ptr_d, [] __device__(const SpaceShip & ship) -> uint32_t { return ship.targetIndex; });
+        LutHelper helper;
+        helper.offensePtr = (uint32_t*) gpu->gpuBuffer["default ship offense"]->ptr_d;
+        auto valsBegin = thrust::make_transform_iterator((SpaceShip*)gpu->gpuBuffer[teamString + "ships sorted"]->ptr_d, helper);
+
+        thrust::device_vector<uint32_t> outKeys(numShips[team - 1]);
+        thrust::device_vector<uint32_t> outVals(numShips[team - 1]);
+
+        auto newEnd = thrust::reduce_by_key(
+            thrust::cuda::par.on(gpu->gpuStream->stream),
+            keysBegin, keysBegin + numShips[team - 1],
+            valsBegin,
+            outKeys.begin(),
+            outVals.begin(),
+            thrust::equal_to<uint32_t>(),
+            thrust::plus<uint32_t>()
+        );
+
+        int numSegments = newEnd.first - outKeys.begin();
+        thrust::host_vector<uint32_t> tmpKeys = outKeys;
+        thrust::host_vector<uint32_t> tmpVals = outVals;
+        // Print results
+        for (int i = 0; i < numSegments; i++) {
+            std::cout << "Ship index: " << tmpKeys[i]
+                << " total damage = " << tmpVals[i] << "\n";
+        }
+    }
     void simulate(std::vector<SpecShipBlockDescriptor> fleet1, std::vector<SpecShipBlockDescriptor> fleet2) {
         int team1 = 1;
         int team2 = 2;
@@ -288,5 +321,7 @@ struct Simulator {
         pickTargetsKernelInit();
         pickTargets();
         sortShipsOnTargets();
+        reduceSegmentDamageByTargetIndex(team1);
+        reduceSegmentDamageByTargetIndex(team2);
     }
 };
