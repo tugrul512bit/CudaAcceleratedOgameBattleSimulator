@@ -60,6 +60,13 @@ struct GpuBuffer {
         cudaMemcpyAsync(ptr_h, ptr_d, numBytes, cudaMemcpyHostToDevice, gpuStream->stream);
         cudaStreamSynchronize(gpuStream->stream);
     }
+    template<typename TYPE>
+    void sort() {
+        cudaSetDevice(gpuStream->deviceIndex);
+        thrust::device_ptr<TYPE> begin_d((TYPE*)(ptr_d));
+        thrust::device_ptr<TYPE> end_d((TYPE*)(ptr_d + numBytes));
+        thrust::sort(thrust::cuda::par.on(gpuStream->stream), begin_d, end_d);
+    }
     ~GpuBuffer() {
         if (numBytes > 0) {
             cudaSetDevice(gpuStream->deviceIndex);
@@ -106,8 +113,10 @@ struct Gpu {
             maxBlocks = 0;
         }
     }
-    void addBuffer(std::string name, uint64_t numBytes) {
-        gpuBuffer[name] = std::make_shared<GpuBuffer>(numBytes, gpuStream);
+    
+    template<typename TYPE>
+    void addBuffer(std::string name, uint64_t numElements) {
+        gpuBuffer[name] = std::make_shared<GpuBuffer>(numElements * sizeof(TYPE), gpuStream);
     }
     void addKernel(std::string kernelName, void* kernelPtr, std::vector<std::string> parameterNames) {
         std::vector<std::shared_ptr<GpuBuffer>> parameters;
@@ -130,104 +139,29 @@ struct Gpu {
 
 };
 
-// This is only a wrapper for multiple gpus to compute same thing as a simulation-level-parallelism.
-struct GpuSystem {
-    int count;
-    std::vector<std::shared_ptr<Gpu>> gpus;
-    GpuSystem(bool debugOutput = false) {
-        cudaGetDeviceCount(&count);
-        for (int i = 0; i < count; i++) {
-            if (debugOutput) {
-                cudaDeviceProp properties;
-                cudaGetDeviceProperties(&properties, i);
-                std::cout << "Creating device object for " << properties.name << std::endl;
-            }
-            gpus.push_back(std::make_shared<Gpu>(i));
-        }
-    }
-
-    template<typename TYPE>
-    void addBuffer(std::string name, uint32_t numElements) {
-        for (auto& gpu : gpus) {
-            gpu->addBuffer(name, numElements * sizeof(TYPE));
-        }
-    }
-    template<typename TYPE>
-    void writeToBuffer(std::string name, uint32_t index, TYPE value) {
-        for (auto& gpu : gpus) {
-            gpu->gpuBuffer[name]->set<TYPE>(index, value);
-        }
-    }
-    template<typename TYPE>
-    TYPE readFromBuffer(int gpu, std::string name, uint32_t index) {
-        return gpus[gpu]->gpuBuffer[name]->get<TYPE>(index);
-    }
-    void updateDeviceBuffer(std::string name) {
-        for (auto& gpu : gpus) {
-            gpu->gpuBuffer[name]->updateDevice();
-        }
-    }
-    void updateHostBuffer(std::string name) {
-        for (auto& gpu : gpus) {
-            gpu->gpuBuffer[name]->updateHost();
-        }
-    }
-    void copyBuffer(std::string sourceName, std::string destinationName) {
-        for (auto& gpu : gpus) {
-            // gpu->gpuBuffer[name]->ptr_d + gpu->gpuBuffer[name]->numBytes
-            gpu->gpuBuffer[sourceName]->copyTo(gpu->gpuBuffer[destinationName].get(), gpu->gpuBuffer[sourceName]->numBytes);
-        }
-    }
-    void sortBuffer(std::string name) {
-        for (auto& gpu : gpus) {
-            cudaSetDevice(gpu->gpuStream->deviceIndex);
-            thrust::device_ptr<SpaceShip> begin_d((SpaceShip*)(gpu->gpuBuffer[name]->ptr_d)); 
-            thrust::device_ptr<SpaceShip> end_d((SpaceShip*)(gpu->gpuBuffer[name]->ptr_d + gpu->gpuBuffer[name]->numBytes));
-            thrust::sort(thrust::cuda::par.on(gpu->gpuStream->stream), begin_d, end_d);
-        }
-    }
-    void addKernel(std::string kernelName, void* kernelPtr, std::vector<std::string> parameterNames) {
-        for (auto& gpu : gpus) {
-            gpu->addKernel(kernelName, kernelPtr, parameterNames);
-        }
-    }
-    void runKernel(std::string name, uint32_t numTotalThreads) {
-        for (auto& gpu : gpus) {
-            gpu->runKernel(name, numTotalThreads);
-        }
-    }
-    void wait() {
-        for (auto& gpu : gpus) {
-            gpu->wait();
-        }
-    }
-
-};
-
 struct Simulator {
-    std::shared_ptr<GpuSystem> system;
+    std::shared_ptr<Gpu> gpu;
     uint32_t numShips[2];
     uint64_t globalBaseRandomSeed[2];
     int numShipTypes;
-    Simulator(bool debug = false, int randomSeedTeam1 = 0, int randomSeedTeam2 = 100) {
-        system = std::make_shared<GpuSystem>(debug);
-        if (debug) {
-            std::cout << "num gpus = " << system->count << std::endl;
-        }
-        system->addBuffer<uint32_t>("team 1 number of ships", 1);
-        system->addBuffer<uint32_t>("team 2 number of ships", 1);
-        system->addBuffer<uint32_t>("team 1 number of ships backup", 1);
-        system->addBuffer<uint32_t>("team 2 number of ships backup", 1);
-        system->addBuffer<uint64_t>("team 1 global base random seed", 1);
-        system->addBuffer<uint64_t>("team 2 global base random seed", 1);
+    Simulator(int gpuIndex = 0, int randomSeedTeam1 = 0, int randomSeedTeam2 = 100) {
+        gpu = std::make_shared<Gpu>(gpuIndex);
+
+        
+        gpu->addBuffer<uint32_t>("team 1 number of ships", 1);
+        gpu->addBuffer<uint32_t>("team 2 number of ships", 1);
+        gpu->addBuffer<uint32_t>("team 1 number of ships backup", 1);
+        gpu->addBuffer<uint32_t>("team 2 number of ships backup", 1);
+        gpu->addBuffer<uint64_t>("team 1 global base random seed", 1);
+        gpu->addBuffer<uint64_t>("team 2 global base random seed", 1);
         numShips[0] = 0;
         numShips[1] = 0;
         globalBaseRandomSeed[0] = randomSeedTeam1;
         globalBaseRandomSeed[1] = randomSeedTeam2;
-        system->writeToBuffer("team 1 number of ships", 0, numShips[0]);
-        system->writeToBuffer("team 2 number of ships", 0, numShips[1]);
-        system->writeToBuffer("team 1 global base random seed", 0, globalBaseRandomSeed[0]);
-        system->writeToBuffer("team 2 global base random seed", 0, globalBaseRandomSeed[1]);
+        gpu->gpuBuffer["team 1 number of ships"]->set<uint32_t>(0, numShips[0]);
+        gpu->gpuBuffer["team 2 number of ships"]->set<uint32_t>(0, numShips[1]);
+        gpu->gpuBuffer["team 1 global base random seed"]->set<uint64_t>(0, globalBaseRandomSeed[0]);
+        gpu->gpuBuffer["team 2 global base random seed"]->set<uint64_t>(0, globalBaseRandomSeed[1]);
 
         // Adding ship specs.
         std::vector<uint32_t> shipTypeIndex;
@@ -251,23 +185,23 @@ struct Simulator {
             shipHull.push_back(1000);
             numShipTypes++;
         }
-        system->addBuffer<uint32_t>("default ship type index", numShipTypes);
-        system->addBuffer<uint32_t>("default ship offense", numShipTypes);
-        system->addBuffer<uint32_t>("default ship shield", numShipTypes);
-        system->addBuffer<uint32_t>("default ship hull", numShipTypes);
-        system->addBuffer<uint32_t>("number of ship types", 1);
-        system->writeToBuffer<uint32_t>("number of ship types", 0, numShipTypes);
-        system->updateDeviceBuffer("number of ship types");
+        gpu->addBuffer<uint32_t>("default ship type index", numShipTypes);
+        gpu->addBuffer<uint32_t>("default ship offense", numShipTypes);
+        gpu->addBuffer<uint32_t>("default ship shield", numShipTypes);
+        gpu->addBuffer<uint32_t>("default ship hull", numShipTypes);
+        gpu->addBuffer<uint32_t>("number of ship types", 1);
+        gpu->gpuBuffer["number of ship types"]->set<uint32_t>(0, numShipTypes);
+        gpu->gpuBuffer["number of ship types"]->updateDevice();
         for (int i = 0; i < numShipTypes; i++) {
-            system->writeToBuffer<uint32_t>("default ship type index", i, shipTypeIndex[i]);
-            system->writeToBuffer<uint32_t>("default ship offense", i, shipOffense[i]);
-            system->writeToBuffer<uint32_t>("default ship shield", i, shipShield[i]);
-            system->writeToBuffer<uint32_t>("default ship hull", i, shipHull[i]);
+            gpu->gpuBuffer["default ship type index"]->set<uint32_t>(i, shipTypeIndex[i]);
+            gpu->gpuBuffer["default ship offense"]->set<uint32_t>(i, shipOffense[i]);
+            gpu->gpuBuffer["default ship shield"]->set<uint32_t>(i, shipShield[i]);
+            gpu->gpuBuffer["default ship hull"]->set<uint32_t>(i, shipHull[i]);
         }
-        system->updateDeviceBuffer("default ship type index");
-        system->updateDeviceBuffer("default ship offense");
-        system->updateDeviceBuffer("default ship shield");
-        system->updateDeviceBuffer("default ship hull");
+        gpu->gpuBuffer["default ship type index"]->updateDevice();
+        gpu->gpuBuffer["default ship offense"]->updateDevice();
+        gpu->gpuBuffer["default ship shield"]->updateDevice();
+        gpu->gpuBuffer["default ship hull"]->updateDevice();
 
         //system->addBuffer
     }
@@ -278,32 +212,32 @@ struct Simulator {
             totalNumberOfShips += c.count;
         }
         numShips[team - 1] = totalNumberOfShips;
-        std::string teamString = std::string("team ") + std::to_string(team) + std::string(" ");
+        std::string teamString = std::string("team ") + std::to_string(team) + std::string(" "); 
         // Init random seed.
-        system->addBuffer<curandState>(teamString + std::string("random seed"), numShips[team - 1]);
+        gpu->addBuffer<curandState>(teamString + std::string("random seed"), numShips[team - 1]);
         // Updating new number of ships on device.
-        system->writeToBuffer(teamString + std::string("number of ships"), 0, numShips[team - 1]);
-        system->updateDeviceBuffer(teamString + std::string("number of ships"));
+        gpu->gpuBuffer[teamString + std::string("number of ships")]->set<uint32_t>(0, numShips[team - 1]);
+        gpu->gpuBuffer[teamString + std::string("number of ships")]->updateDevice();
         // Initializing random seeds of each ship.
-        system->addKernel(teamString + std::string("init random seed"), (void*)Kernels::k_initializeRandomSeeds, { teamString + std::string("random seed"), teamString + "number of ships", teamString + "global base random seed" });
-        system->runKernel(teamString + std::string("init random seed"), numShips[team - 1]);
-        system->addBuffer<SpaceShip>(teamString + std::string("ships"), numShips[team - 1]);
-        system->addBuffer<SpaceShip>(teamString + std::string("ships sorted"), numShips[team - 1]);
-        system->addBuffer<SpaceShip>(teamString + std::string("ships backup"), numShips[team - 1]);
-        system->writeToBuffer(teamString + std::string("number of ships backup"), 0, numShips[team - 1]);
-        system->updateDeviceBuffer(teamString + std::string("number of ships backup"));
-        system->addBuffer<uint32_t>(teamString + std::string("number of descriptors"), 1);
-        system->writeToBuffer(teamString + std::string("number of descriptors"), 0, ships.size());
-        system->addBuffer<SpecShipBlockDescriptor>(teamString + std::string("ship type descriptors"), ships.size());
+        gpu->addKernel(teamString + std::string("init random seed"), (void*)Kernels::k_initializeRandomSeeds, { teamString + std::string("random seed"), teamString + "number of ships", teamString + "global base random seed" });
+        gpu->runKernel(teamString + std::string("init random seed"), numShips[team - 1]);
+        gpu->addBuffer<SpaceShip>(teamString + std::string("ships"), numShips[team - 1]);
+        gpu->addBuffer<SpaceShip>(teamString + std::string("ships sorted"), numShips[team - 1]);
+        gpu->addBuffer<SpaceShip>(teamString + std::string("ships backup"), numShips[team - 1]);
+        gpu->gpuBuffer[teamString + std::string("number of ships backup")]->set<uint32_t>(0, numShips[team - 1]);
+        gpu->gpuBuffer[teamString + std::string("number of ships backup")]->updateDevice();
+        gpu->addBuffer<uint32_t>(teamString + std::string("number of descriptors"), 1);
+        gpu->gpuBuffer[teamString + std::string("number of descriptors")]->set<uint32_t>(0, ships.size());
+        gpu->addBuffer<SpecShipBlockDescriptor>(teamString + std::string("ship type descriptors"), ships.size());
         for (int i = 0; i < ships.size(); i++) {
-            system->writeToBuffer(teamString + std::string("ship type descriptors"), i, ships[i]);
+            gpu->gpuBuffer[teamString + std::string("ship type descriptors")]->set<SpecShipBlockDescriptor>(i, ships[i]);
         }
-        system->updateDeviceBuffer(teamString + std::string("number of descriptors"));
-        system->updateDeviceBuffer(teamString + std::string("ship type descriptors"));
-        system->wait();
+        gpu->gpuBuffer[teamString + std::string("number of descriptors")]->updateDevice();
+        gpu->gpuBuffer[teamString + std::string("ship type descriptors")]->updateDevice();
+        gpu->wait();
     }
     void initShips() {
-        system->addKernel(std::string("init space ships"), (void*)Kernels::k_initializeShipHulls, {
+        gpu->addKernel(std::string("init space ships"), (void*)Kernels::k_initializeShipHulls, {
             std::string("team 1 number of ships"),
             std::string("team 2 number of ships"),
             std::string("team 1 ships"),
@@ -318,11 +252,11 @@ struct Simulator {
             std::string("number of ship types")
             });
         uint32_t n = (numShips[0] < numShips[1]) ? numShips[1] : numShips[0];
-        system->runKernel(std::string("init space ships"), n);
-        system->wait();
+        gpu->runKernel(std::string("init space ships"), n);
+        gpu->wait();
     }
     void pickTargetsKernelInit() {
-        system->addKernel(std::string("pick targets"), (void*)Kernels::k_pickTarget, { 
+        gpu->addKernel(std::string("pick targets"), (void*)Kernels::k_pickTarget, { 
             std::string("team 1 random seed"),  
             std::string("team 2 random seed"),
             std::string("team 1 ships"),
@@ -332,28 +266,24 @@ struct Simulator {
         });
     }
     void pickTargets() {
-        int firstGpu = 0;
-        numShips[0] = system->readFromBuffer<uint32_t>(firstGpu, std::string("team 1 number of ships backup"), 0);
-        numShips[1] = system->readFromBuffer<uint32_t>(firstGpu, std::string("team 1 number of ships backup"), 1);
+        numShips[0] = gpu->gpuBuffer["team 1 number of ships backup"]->get<uint32_t>(0);
+        numShips[1] = gpu->gpuBuffer["team 2 number of ships backup"]->get<uint32_t>(0);
         uint32_t n = (numShips[0] < numShips[1]) ? numShips[1] : numShips[0];
-        system->runKernel(std::string("pick targets"), n);
-        system->wait();
+        gpu->runKernel(std::string("pick targets"), n);
+        gpu->wait();
     }
     void sortShipsOnTargets() {
-       system->copyBuffer("team 1 ships", "team 1 ships sorted");
-       system->copyBuffer("team 2 ships", "team 2 ships sorted");
-       system->sortBuffer("team 1 ships sorted");
-       system->sortBuffer("team 2 ships sorted");
-       system->wait();
+       gpu->gpuBuffer["team 1 ships"]->copyTo(gpu->gpuBuffer["team 1 ships sorted"].get(), gpu->gpuBuffer["team 1 ships"]->numBytes);
+       gpu->gpuBuffer["team 2 ships"]->copyTo(gpu->gpuBuffer["team 2 ships sorted"].get(), gpu->gpuBuffer["team 2 ships"]->numBytes);
+       gpu->gpuBuffer["team 1 ships sorted"]->sort<SpaceShip>();
+       gpu->gpuBuffer["team 2 ships sorted"]->sort<SpaceShip>();
+       gpu->wait();
     }
-    void demo() {
-        // Adding 900 light fighters, 100 heavy fighters
+    void simulate(std::vector<SpecShipBlockDescriptor> fleet1, std::vector<SpecShipBlockDescriptor> fleet2) {
         int team1 = 1;
         int team2 = 2;
-        uint32_t lightFighter = 0;
-        uint32_t heavyFighter = 1;
-        addShips(team1, { { lightFighter, 900 }, { heavyFighter, 100 } });
-        addShips(team2, { { lightFighter, 900 }, { heavyFighter, 100 } });
+        addShips(team1, fleet1);
+        addShips(team2, fleet2);
         initShips();
         pickTargetsKernelInit();
         pickTargets();
