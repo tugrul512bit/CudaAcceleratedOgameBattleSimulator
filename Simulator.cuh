@@ -226,6 +226,8 @@ struct Simulator {
         gpu->runKernel(teamString + std::string("init random seed"), numShips[team - 1]);
         gpu->addBuffer<SpaceShip>(teamString + std::string("ships"), numShips[team - 1]);
         gpu->addBuffer<SpaceShip>(teamString + std::string("ships sorted"), numShips[team - 1]);
+        gpu->addBuffer<uint32_t>(teamString + std::string("target index reduced"), numShips[team - 1]);
+        gpu->addBuffer<uint32_t>(teamString + std::string("damage reduced"), numShips[team - 1]);
         gpu->addBuffer<SpaceShip>(teamString + std::string("ships backup"), numShips[team - 1]);
         gpu->gpuBuffer[teamString + std::string("number of ships backup")]->set<uint32_t>(0, numShips[team - 1]);
         gpu->gpuBuffer[teamString + std::string("number of ships backup")]->updateDevice();
@@ -290,26 +292,23 @@ struct Simulator {
         helper.offensePtr = (uint32_t*) gpu->gpuBuffer["default ship offense"]->ptr_d;
         auto valsBegin = thrust::make_transform_iterator((SpaceShip*)gpu->gpuBuffer[teamString + "ships sorted"]->ptr_d, helper);
 
-        thrust::device_vector<uint32_t> outKeys(numShips[team - 1]);
-        thrust::device_vector<uint32_t> outVals(numShips[team - 1]);
-
+        thrust::device_ptr<uint32_t> outKeys((uint32_t*)(gpu->gpuBuffer[teamString + "target index reduced"]->ptr_d));
+        thrust::device_ptr<uint32_t> outVals((uint32_t*)(gpu->gpuBuffer[teamString + "damage reduced"]->ptr_d));
         auto newEnd = thrust::reduce_by_key(
             thrust::cuda::par.on(gpu->gpuStream->stream),
             keysBegin, keysBegin + numShips[team - 1],
             valsBegin,
-            outKeys.begin(),
-            outVals.begin(),
+            outKeys,
+            outVals,
             thrust::equal_to<uint32_t>(),
             thrust::plus<uint32_t>()
         );
 
-        int numSegments = newEnd.first - outKeys.begin();
-        thrust::host_vector<uint32_t> tmpKeys = outKeys;
-        thrust::host_vector<uint32_t> tmpVals = outVals;
+        int numSegments = newEnd.first - outKeys;
         // Print results
         for (int i = 0; i < numSegments; i++) {
-            std::cout << "Ship index: " << tmpKeys[i]
-                << " total damage = " << tmpVals[i] << "\n";
+            std::cout << "Ship index: " << outKeys[i]
+                << " total damage = " << outVals[i] << "\n";
         }
     }
     void simulate(std::vector<SpecShipBlockDescriptor> fleet1, std::vector<SpecShipBlockDescriptor> fleet2) {
