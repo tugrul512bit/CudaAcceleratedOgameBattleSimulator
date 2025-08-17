@@ -184,8 +184,6 @@ struct GpuSystem {
             thrust::device_ptr<SpaceShip> begin_d((SpaceShip*)(gpu->gpuBuffer[name]->ptr_d)); 
             thrust::device_ptr<SpaceShip> end_d((SpaceShip*)(gpu->gpuBuffer[name]->ptr_d + gpu->gpuBuffer[name]->numBytes));
             thrust::sort(thrust::cuda::par.on(gpu->gpuStream->stream), begin_d, end_d);
-            // debug:
-            gpu->gpuBuffer[name]->updateHost();
         }
     }
     void addKernel(std::string kernelName, void* kernelPtr, std::vector<std::string> parameterNames) {
