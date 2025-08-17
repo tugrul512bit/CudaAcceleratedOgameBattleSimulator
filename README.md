@@ -16,8 +16,8 @@ Development:
 
 - initialization of random seeds for ships: done
 - initialization of hull (hitpoints) for ships: done
-- initialization of ship types: to do
-- copying ship data to simulation ship data (that will be updated many times): to do
+- initialization of ship types: done
+- copying ship data to simulation ship data (that will be updated many times): done
 - randomly picking a target per simulation ship: to do
 - sorting simulation ships on their target index: to do (this can be done with thrust or cub)
 - segmented reduction or histogram of total damage from source simulation ships to target simulation ships and calculating remaining hull: to do (cub or thrust)
